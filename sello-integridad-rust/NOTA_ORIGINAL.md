@@ -1,0 +1,1 @@
+# **sello de integridad criptográfica en Rust**

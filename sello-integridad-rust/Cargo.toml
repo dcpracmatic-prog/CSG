@@ -1,0 +1,66 @@
+[package]
+name = "sello_integridad"
+version = "1.1.0"
+edition = "2021"
+authors = ["Sello de Integridad Técnica <seguridad@sello-integridad.dev>"]
+description = "Primitiva de attestación criptográfica para activos de ingeniería - Versión Rust de producción"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/sello-integridad/sello-integridad-rust"
+keywords = ["cryptography", "ed25519", "attestation", "integrity", "notary"]
+categories = ["cryptography", "authentication"]
+
+[dependencies]
+# Criptografía de curva elíptica - constant-time auditado
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+
+# Hash SHA3-256
+sha3 = "0.10"
+
+# Borrado seguro de memoria - CRÍTICO para claves privadas
+zeroize = { version = "1.7", features = ["derive"] }
+
+# Serialización
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+
+# Codificación hexadecimal
+hex = "0.4"
+
+# Generación aleatoria segura
+rand = "0.8"
+
+# Errores descriptivos
+thiserror = "1.0"
+
+# Logging seguro
+tracing = "0.1"
+
+# Mutex poisoning-free para estado concurrente
+parking_lot = "0.12"
+
+# AEAD para cifrado de huellas de daño y payloads sensibles
+aes-gcm = "0.10"
+
+# KDF resistente a fuerza bruta (sustituye PBKDF2 de la demo CSG)
+argon2 = "0.5"
+
+# Traits de digest/password hashing
+password-hash = "0.5"
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.release.build-override]
+opt-level = 3
+
+[features]
+default = []
+side-channel-debug = []
+hsm = []
