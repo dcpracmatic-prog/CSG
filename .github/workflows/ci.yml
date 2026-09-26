@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (sello-integridad)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sello-integridad-rust
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sello-integridad-rust
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+        continue-on-error: true
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Run unit tests
+        run: cargo test --lib --verbose -- --test-threads=1
+
+      - name: Run examples (compile)
+        run: cargo build --examples
+
+  python-csg:
+    name: Python (csg_lock)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install numpy
+
+      - name: Run CSG experiment
+        run: python3 csg_lock.py

@@ -59,7 +59,13 @@ Tras N intentos fallidos el notario queda en `estructura_rota` y deja de emitir 
 
 ## Licencia
 
-MIT OR Apache-2.0 (crate Rust). El script CSG se ofrece como experimento de investigación.
+Este repositorio se distribuye bajo la **Elastic License 2.0** (ELv2).
+Consulte el archivo [LICENSE](LICENSE) para el texto completo.
+
+Resumen de limitaciones ELv2:
+- No ofrecer el software a terceros como servicio alojado/gestionado.
+- No eludir funcionalidad de claves de licencia ni ocultar avisos.
+- No eliminar avisos de licencia o copyright.
 
 ## Seguridad
 

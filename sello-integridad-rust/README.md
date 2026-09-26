@@ -68,3 +68,8 @@ cargo run --example demo_api
 ## Licencia
 
 MIT OR Apache-2.0
+
+## License
+
+Elastic License 2.0 — see [LICENSE](../LICENSE).
+
