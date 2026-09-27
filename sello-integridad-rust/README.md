@@ -15,7 +15,7 @@ Primitiva de attestación criptográfica para activos de ingeniería (planos CAD
 ```rust
 use sello_integridad::{Firmante, Notario, verificar_sello};
 
-let ingeniero = Firmante::generar("Arturo");
+let ingeniero = Firmante::generar("nombre");
 let notario = Notario::nuevo("Mi Empresa");
 notario.registrar_firmante_autorizado("proyecto-x", ingeniero.clave_publica_hex());
 
