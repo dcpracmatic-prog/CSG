@@ -21,15 +21,12 @@
 //! let notario = Notario::nuevo("Mi Empresa - Sellado");
 //! notario.registrar_firmante_autorizado("proyecto-x", ingeniero.clave_publica_hex());
 //!
-//! // Sellar contenido
+//! // Sellar contenido (sellar_archivo/sellar_evento atestiguan el hash
+//! // del CONTENIDO real; notarizar_transaccion es para otro caso de
+//! // uso — ver su documentación antes de usarla con un Evento)
 //! let contenido = b"plano_v1.dwg";
 //! let (evento, firma) = ingeniero.crear_evento_archivo(contenido, "proyecto-x", None).unwrap();
-//! let sello = notario.notarizar_transaccion(
-//!     &serde_json::to_value(&evento).unwrap(),
-//!     &firma,
-//!     &ingeniero.clave_publica(),
-//!     "proyecto-x",
-//! ).unwrap();
+//! let sello = notario.sellar_archivo(&evento, &firma, &ingeniero.clave_publica()).unwrap();
 //!
 //! // Verificación independiente (meses después, por un tercero)
 //! let reporte = verificar_sello(&sello, &notario.clave_publica_hex(), None).unwrap();
@@ -51,6 +48,7 @@ pub use error::{Result, SelloError};
 pub use evento::{CuerpoSello, Evento, TipoEvento};
 pub use firmante::Firmante;
 pub use notario::{Notario, NotarioProtegido};
+pub use persistencia::{AlmacenSellos, NotarioPersistente};
 pub use proteccion::{
     ClaveMaestraDanio, EstadoProteccion, GestorProteccion, PoliticaConatus,
 };
@@ -81,17 +79,13 @@ mod tests {
             .crear_evento_archivo(contenido, "p1", Some("evt-1".to_string()))
             .unwrap();
 
-        // Notarizar
+        // Sellar (atestigua el hash del contenido real del archivo)
         let sello = notario
-            .notarizar_transaccion(
-                &serde_json::to_value(&evento).unwrap(),
-                &firma,
-                &ingeniero.clave_publica(),
-                "p1",
-            )
+            .sellar_archivo(&evento, &firma, &ingeniero.clave_publica())
             .unwrap();
 
         assert!(sello.aceptado);
+        assert_eq!(sello.hash_contenido, evento.hash_contenido);
 
         // Verificación independiente
         let reporte = verificar_sello(&sello, &notario.clave_publica_hex(), None).unwrap();
