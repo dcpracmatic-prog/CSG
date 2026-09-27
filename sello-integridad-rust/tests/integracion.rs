@@ -16,22 +16,22 @@ fn test_flujo_completo_ingenieria() {
     notario.registrar_firmante_autorizado(proyecto, ingeniero.clave_publica_hex());
 
     // Versión 1 del plano
+    // NOTA: se usa sellar_archivo (no notarizar_transaccion) porque
+    // queremos que el sello atestigüe el hash del CONTENIDO del plano
+    // (version_1), no el hash del JSON del Evento que lo describe. Ver
+    // la nota de diseño en Notario::notarizar_transaccion.
     let version_1 = b"PLANO_v1.dwg :: geometria original, revision A";
     let (evento1, firma1) = ingeniero
         .crear_evento_archivo(version_1, proyecto, Some("plano-v1".to_string()))
         .unwrap();
 
     let sello1 = notario
-        .notarizar_transaccion(
-            &serde_json::to_value(&evento1).unwrap(),
-            &firma1,
-            &ingeniero.clave_publica(),
-            proyecto,
-        )
+        .sellar_archivo(&evento1, &firma1, &ingeniero.clave_publica())
         .unwrap();
 
     assert!(sello1.aceptado);
     assert_eq!(sello1.razon, "atestado");
+    assert_eq!(sello1.hash_contenido, evento1.hash_contenido);
 
     // Versión 2
     let version_2 = b"PLANO_v2.dwg :: geometria original, revision B - ajuste tolerancia";
@@ -40,15 +40,11 @@ fn test_flujo_completo_ingenieria() {
         .unwrap();
 
     let sello2 = notario
-        .notarizar_transaccion(
-            &serde_json::to_value(&evento2).unwrap(),
-            &firma2,
-            &ingeniero.clave_publica(),
-            proyecto,
-        )
+        .sellar_archivo(&evento2, &firma2, &ingeniero.clave_publica())
         .unwrap();
 
     assert!(sello2.aceptado);
+    assert_eq!(sello2.hash_contenido, evento2.hash_contenido);
 
     // Verificación de encadenamiento
     assert!(sello2.verificar_encadenamiento(&sello1.cuerpo_hash));
@@ -82,12 +78,7 @@ fn test_ataque_suplantacion_fallido() {
         .unwrap();
 
     let sello_fraude = notario
-        .notarizar_transaccion(
-            &serde_json::to_value(&evento_malicioso).unwrap(),
-            &firma_atacante,
-            &atacante.clave_publica(),
-            proyecto,
-        )
+        .sellar_archivo(&evento_malicioso, &firma_atacante, &atacante.clave_publica())
         .unwrap();
 
     // Debe ser rechazado
@@ -100,12 +91,7 @@ fn test_ataque_suplantacion_fallido() {
         .unwrap();
 
     let sello_legit = notario
-        .notarizar_transaccion(
-            &serde_json::to_value(&evento_legit).unwrap(),
-            &firma_legit,
-            &ingeniero.clave_publica(),
-            proyecto,
-        )
+        .sellar_archivo(&evento_legit, &firma_legit, &ingeniero.clave_publica())
         .unwrap();
 
     assert!(sello_legit.aceptado);
@@ -132,12 +118,7 @@ fn test_propiedad_no_bloqueo() {
             .unwrap();
 
         let sello = notario
-            .notarizar_transaccion(
-                &serde_json::to_value(&evento).unwrap(),
-                &firma,
-                &atacante.clave_publica(),
-                "p1",
-            )
+            .sellar_archivo(&evento, &firma, &atacante.clave_publica())
             .unwrap();
 
         assert!(!sello.aceptado);
@@ -149,12 +130,7 @@ fn test_propiedad_no_bloqueo() {
         .unwrap();
 
     let sello_legit = notario
-        .notarizar_transaccion(
-            &serde_json::to_value(&evento_legit).unwrap(),
-            &firma_legit,
-            &ingeniero.clave_publica(),
-            "p1",
-        )
+        .sellar_archivo(&evento_legit, &firma_legit, &ingeniero.clave_publica())
         .unwrap();
 
     assert!(sello_legit.aceptado);
@@ -173,12 +149,7 @@ fn test_deteccion_alteracion_posterior() {
         .unwrap();
 
     let sello = notario
-        .notarizar_transaccion(
-            &serde_json::to_value(&evento).unwrap(),
-            &firma,
-            &ingeniero.clave_publica(),
-            "p1",
-        )
+        .sellar_archivo(&evento, &firma, &ingeniero.clave_publica())
         .unwrap();
 
     // Verificar que el contenido no fue alterado
@@ -206,12 +177,7 @@ fn test_verificacion_independiente_sin_software_original() {
         .unwrap();
 
     let sello = notario
-        .notarizar_transaccion(
-            &serde_json::to_value(&evento).unwrap(),
-            &firma,
-            &ingeniero.clave_publica(),
-            "p1",
-        )
+        .sellar_archivo(&evento, &firma, &ingeniero.clave_publica())
         .unwrap();
 
     // Exportar la clave pública del notario (publicación)
@@ -243,12 +209,7 @@ fn test_exportar_cadena() {
             .unwrap();
 
         notario
-            .notarizar_transaccion(
-                &serde_json::to_value(&evento).unwrap(),
-                &firma,
-                &ingeniero.clave_publica(),
-                "p1",
-            )
+            .sellar_archivo(&evento, &firma, &ingeniero.clave_publica())
             .unwrap();
     }
 
