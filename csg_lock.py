@@ -318,5 +318,6 @@ if __name__ == "__main__":
     print("=" * 70)
     print(json.dumps(out, indent=2, ensure_ascii=False))
 
-    with open("/home/claude/csg/csg_results.json", "w") as f:
+    output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csg_results.json")
+    with open(output_path, "w") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)
