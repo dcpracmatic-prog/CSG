@@ -45,6 +45,29 @@ let master = ClaveMaestraDanio::generar(); // o secreto externo / HSM
 let notario = NotarioProtegido::con_politica("Seguro", politica, Some(master));
 ```
 
+### Notario persistente (sobrevive reinicios)
+
+`Notario` y `NotarioProtegido` viven solo en memoria: si el proceso
+termina, se pierde la cadena, el estado de protección contra replay y
+las autorizaciones. `NotarioPersistente` envuelve a `Notario` y
+escribe cada sello al abrirlo con `AlmacenSellos` (append en disco,
+sin reescribir la cadena completa en cada sello):
+
+```rust
+use sello_integridad::{ClavePrivada, Firmante, NotarioPersistente};
+
+let clave = ClavePrivada::generar(); // en producción: HSM / secreto externo
+let notario = NotarioPersistente::abrir("Mi Empresa", "./datos-notario", clave)?;
+// Si "./datos-notario" ya tenía una cadena, se recupera aquí: la
+// protección contra replay cubre también los eventos previos.
+
+let ingeniero = Firmante::generar("Arturo");
+notario.registrar_firmante_autorizado("proyecto-x", ingeniero.clave_publica_hex())?;
+
+let (evento, firma) = ingeniero.crear_evento_archivo(b"plano.dwg", "proyecto-x", None)?;
+let sello = notario.sellar_archivo(&evento, &firma, &ingeniero.clave_publica())?;
+```
+
 ## Compilar y probar
 
 ```bash
