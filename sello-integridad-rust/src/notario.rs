@@ -48,6 +48,23 @@ struct EstadoNotario {
     autorizados: HashMap<String, HashSet<String>>,
 }
 
+/// Heurística de depuración: ¿este `Value` tiene la forma de un
+/// `Evento` serializado (los campos que produce `Evento::nuevo`)?
+///
+/// Solo se usa en `debug_assert!` dentro de `notarizar_transaccion`
+/// para avisar en desarrollo/tests del uso confuso descrito en su
+/// documentación; nunca cambia el comportamiento en release ni rechaza
+/// nada — sigue siendo válido pasar una transacción que legítimamente
+/// tenga estos mismos nombres de campo por otra razón.
+fn parece_evento_serializado(value: &serde_json::Value) -> bool {
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
+    ["evento_id", "hash_contenido", "tipo", "proyecto_id", "timestamp"]
+        .iter()
+        .all(|campo| obj.contains_key(*campo))
+}
+
 impl Notario {
     /// Crea un nuevo notario con clave generada aleatoriamente
     pub fn nuevo(nombre: impl Into<String>) -> Self {
@@ -67,6 +84,14 @@ impl Notario {
     ///
     /// # Seguridad
     /// La clave privada se consume y se borra de la memoria original
+    ///
+    /// # Nota
+    /// Este constructor deja el estado (cadena de sellos, `vistos`,
+    /// autorizados) vacío. Para restaurar un notario que ya tenía
+    /// historial, usar [`Self::desde_clave_y_estado`] con lo que se
+    /// haya recuperado de un almacén persistente — de lo contrario la
+    /// protección contra replay no cubre eventos ya sellados antes del
+    /// reinicio.
     pub fn desde_clave(nombre: impl Into<String>, clave: ClavePrivada) -> Self {
         Self {
             nombre: nombre.into(),
@@ -78,6 +103,60 @@ impl Notario {
                 autorizados: HashMap::new(),
             })),
         }
+    }
+
+    /// Crea un notario desde una clave privada y un estado previamente
+    /// recuperado (cadena de sellos ya verificada + autorizados).
+    ///
+    /// # Uso
+    /// Pensado para `NotarioPersistente::abrir`: los `sellos` deben
+    /// venir de `AlmacenSellos::cargar_todos()` (que ya valida
+    /// encadenamiento e integridad de cada registro), y `autorizados`
+    /// de `AlmacenSellos::cargar_autorizados()`. `vistos` y
+    /// `ultimo_hash` se derivan aquí mismo a partir de `sellos`, para
+    /// no poder pasarlos inconsistentes por error del llamador.
+    ///
+    /// # Nota sobre `vistos`
+    /// Solo los `evento_id` de sellos **aceptados** entran a `vistos`,
+    /// igual que hace `procesar_evento` en memoria (que inserta en
+    /// `vistos` únicamente tras pasar autorización y no-replay). Un
+    /// `evento_id` que solo aparece en sellos *rechazados* (firma
+    /// inválida, no autorizado) no debe bloquear un reintento legítimo
+    /// posterior con el mismo id.
+    pub fn desde_clave_y_estado(
+        nombre: impl Into<String>,
+        clave: ClavePrivada,
+        sellos: Vec<Sello>,
+        autorizados: HashMap<String, HashSet<String>>,
+    ) -> Self {
+        let mut vistos = HashSet::with_capacity(sellos.len());
+        let mut ultimo_hash = GENESIS_HASH.to_string();
+        for sello in &sellos {
+            if sello.aceptado {
+                vistos.insert(sello.evento_id.clone());
+            }
+            // El encadenamiento avanza con TODOS los sellos, aceptados
+            // o no (así funciona emitir_sello: cada llamada, incluso de
+            // rechazo, encadena sobre el hash anterior y actualiza
+            // ultimo_hash).
+            ultimo_hash = sello.cuerpo_hash.clone();
+        }
+
+        Self {
+            nombre: nombre.into(),
+            clave_privada: clave,
+            estado: Arc::new(RwLock::new(EstadoNotario {
+                vistos,
+                sellos,
+                ultimo_hash,
+                autorizados,
+            })),
+        }
+    }
+
+    /// Snapshot del mapa de firmantes autorizados (para persistirlo).
+    pub fn autorizados_snapshot(&self) -> HashMap<String, HashSet<String>> {
+        self.estado.read().autorizados.clone()
     }
 
     /// Obtiene el nombre del notario
@@ -194,6 +273,19 @@ impl Notario {
 
     /// Notariza una transacción firmada
     ///
+    /// # Diferencia con `sellar_archivo` / `sellar_evento`
+    /// El `hash_contenido` que termina en el sello es el hash del JSON
+    /// canónico de `transaccion` tal cual se recibe aquí — NO el hash
+    /// de ningún archivo o payload que `transaccion` pudiera describir.
+    /// Si `transaccion` es en realidad un `Evento` ya construido (por
+    /// ejemplo `serde_json::to_value(&evento)`), el sello resultante
+    /// atestigua el JSON del evento, no el `hash_contenido` que ese
+    /// evento lleva dentro. Para atestiguar el contenido real de un
+    /// archivo, usar `sellar_archivo`/`sellar_evento` con el
+    /// `(Evento, FirmaBytes)` que produce
+    /// `Firmante::crear_evento_archivo`, no pasar ese `Evento`
+    /// serializado a esta función.
+    ///
     /// # Argumentos
     /// * `transaccion` - Datos de la transacción (se canonicalizan)
     /// * `firma` - Firma del firmante sobre la transacción canónica
@@ -206,6 +298,13 @@ impl Notario {
         firmante_pub: &ClavePublica,
         proyecto_id: impl Into<String>,
     ) -> Result<Sello> {
+        debug_assert!(
+            !parece_evento_serializado(transaccion),
+            "notarizar_transaccion() recibió lo que parece un Evento serializado; \
+             el hash_contenido resultante será el del JSON del evento, no el del \
+             archivo original. Usa sellar_archivo()/sellar_evento() para eso."
+        );
+
         // Canonicalizar transacción
         let canonico = json_canonico(transaccion);
         let hash_contenido = to_hex(&sha3_256(canonico.as_bytes()));
