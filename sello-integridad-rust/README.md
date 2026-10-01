@@ -88,9 +88,6 @@ cargo run --example demo_api
 | `evento` | Eventos y cuerpo canónico |
 | `error` | Errores tipados |
 
-## Licencia
-
-MIT OR Apache-2.0
 
 ## License
 
