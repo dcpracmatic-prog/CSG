@@ -1,3 +1,5 @@
+[![CI](https://github.com/dcpracmatic-prog/CSG/actions/workflows/ci.yml/badge.svg)](https://github.com/dcpracmatic-prog/CSG/actions/workflows/ci.yml)
+
 # CSG — Cerradura de Seguridad Geométrica / Sello de Integridad
 
 Repositorio que combina:
