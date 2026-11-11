@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+csg_results.json
+sello-integridad-rust/target/
