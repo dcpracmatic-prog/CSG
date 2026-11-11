@@ -54,10 +54,10 @@ jobs:
           python-version: "3.12"
           
       - name: Install dependencies
-        run: pip install numpy
-        
-      - name: Install dependencies
-        run: pip install numpy
+        run: pip install -r requirements.txt
 
       - name: Run CSG experiment
         run: python3 csg_lock.py
+
+      - name: Run Python tests
+        run: python3 -m unittest discover -s tests -v

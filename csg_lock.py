@@ -34,9 +34,19 @@ import hashlib
 import hmac
 import os
 import json
+import pickle
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional
+
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.exceptions import InvalidTag
+except ImportError as _exc:  # noqa: F841 — fallar alto, nunca volver al XOR en silencio
+    raise ImportError(
+        "csg_lock.py necesita el paquete 'cryptography' (AES-256-GCM): "
+        "pip install -r requirements.txt"
+    ) from _exc
 
 RNG = np.random.default_rng(42)
 
@@ -85,10 +95,23 @@ def derive_key(direction: np.ndarray, salt: bytes) -> bytes:
     return hashlib.pbkdf2_hmac("sha3-256", quantized.tobytes(), salt, 100_000, dklen=32)
 
 
-def xor_encrypt(payload: bytes, key: bytes) -> bytes:
-    # cifrado de flujo simple para la demo (en producción: AES-GCM con esta key)
-    stream = (key * (len(payload) // len(key) + 1))[:len(payload)]
-    return bytes(a ^ b for a, b in zip(payload, stream))
+def aesgcm_encrypt(payload: bytes, key: bytes) -> bytes:
+    """AES-256-GCM con clave de 32 B derivada por PBKDF2.
+
+    Devuelve nonce(12 B) || ciphertext || tag(16 B). El nonce es aleatorio
+    por cifrado, así que el mismo claro nunca produce el mismo cifrado y no
+    hay repetición de flujo como en el XOR anterior (que repetía la clave
+    cada 32 B). La autenticación (tag) hace que cualquier alteración de un
+    bit se detecte en el descifrado (InvalidTag) en vez de devolver basura.
+    """
+    nonce = os.urandom(12)
+    return nonce + AESGCM(key).encrypt(nonce, payload, None)
+
+
+def aesgcm_decrypt(blob: bytes, key: bytes) -> bytes:
+    """Inversa de aesgcm_encrypt. Lanza InvalidTag si el blob fue alterado."""
+    nonce, ciphertext = blob[:12], blob[12:]
+    return AESGCM(key).decrypt(nonce, ciphertext, None)
 
 
 # ---------------------------------------------------------------------
@@ -110,16 +133,32 @@ class BlindLock:
     damage_log: List[bytes] = field(default_factory=list)  # huellas cifradas, irreversibles
     attempts: int = 0
     structure_broken: bool = False      # se activa tras umbral -> invalida TODO
+    conatus_delay_base_s: float = 0.05  # retardo real por fallo: sleep(base x conatus)
 
     BREAK_THRESHOLD: int = 5            # nº de fallos que rompe la estructura entera
 
+    def __getstate__(self):
+        """Defensa en profundidad (Q3): aunque true_direction llegara a estar
+        asignada, pickle nunca la serializa. enroll() además la borra."""
+        state = self.__dict__.copy()
+        state["true_direction"] = None
+        return state
+
+    def __setstate__(self, state):
+        state["true_direction"] = None
+        self.__dict__.update(state)
+
     def enroll(self, payload: bytes, direction: Optional[np.ndarray] = None):
-        self.true_direction = direction if direction is not None else random_direction(self.n_dim)
-        self.stored_commit = commit(self.true_direction, self.salt)
-        key = derive_key(self.true_direction, self.salt)
-        self.protected_payload = xor_encrypt(payload, key)
-        # NOTA: self.true_direction se usa solo en memoria durante enroll.
-        # En un token real, se descarta inmediatamente tras generar commit+payload.
+        direction = direction if direction is not None else random_direction(self.n_dim)
+        self.stored_commit = commit(direction, self.salt)
+        key = derive_key(direction, self.salt)
+        self.protected_payload = aesgcm_encrypt(payload, key)
+        # Q3 ESTRUCTURAL (antes solo convencional): la dirección real se usa
+        # solo como variable local y NO queda en el objeto. Quien la necesite
+        # después (el dueño) debe guardarla fuera del token; enroll() no la
+        # devuelve ni la conserva. pickle.dumps(lock) ya no la recupera
+        # (ver tests/test_csg_lock.py::test_pickle_no_filtra_direccion).
+        self.true_direction = None
 
     def attempt_access(self, direction_attempt: np.ndarray, event_key_material: bytes = None):
         """Cada intento es un evento atómico. No hay 'casi'."""
@@ -129,12 +168,18 @@ class BlindLock:
         if ok:
             # acceso legítimo: descifra y NO altera el conatus (no es un "evento de daño")
             key = derive_key(direction_attempt, self.salt)
-            payload = xor_encrypt(self.protected_payload, key)  # xor es involutivo
+            payload = aesgcm_decrypt(self.protected_payload, key)
             return {"granted": True, "payload": payload}
 
         # ---- FALLO: esto es la parte crítica ----
         # (a) sube conatus (endurecimiento exponencial)
         self.conatus_level *= 1.6
+
+        # (a2) retardo REAL: el conatus ya no es solo un número. Cada fallo
+        # espera sleep(base x conatus) segundos antes de responder, así que
+        # el siguiente intento cuesta más tiempo de verdad (medido en
+        # tests/test_csg_lock.py::test_conatus_es_retardo_real).
+        time.sleep(self.conatus_delay_base_s * self.conatus_level)
 
         # (b) registra huella IRREVERSIBLE cifrada con clave derivada del propio evento
         #     (no del atacante, no del dueño -> ni siquiera el sistema puede releerla
@@ -149,7 +194,7 @@ class BlindLock:
         # sin la clave maestra externa (aquí simulada con event_key_material)
         master = event_key_material or b"OWNER_MASTER_KEY_DEMO"
         fp_key = hashlib.pbkdf2_hmac("sha3-256", master, event_salt, 50_000, dklen=32)
-        fingerprint_cipher = xor_encrypt(fingerprint_plain, fp_key)
+        fingerprint_cipher = aesgcm_encrypt(fingerprint_plain, fp_key)
         self.damage_log.append(event_salt + fingerprint_cipher)
 
         # (c) ambas cosas ocurren en la MISMA llamada, atómicamente -> inevitable
@@ -168,7 +213,9 @@ class BlindLock:
         recuperable ni con la key derivada correcta)."""
         # invalidar clave estructural: mutar el commit irreversiblemente
         self.stored_commit = hashlib.sha3_256(self.stored_commit + b"BROKEN").digest()
-        # corromper el payload: XOR con ruido derivado del propio damage_log
+        # corromper el payload: XOR con ruido derivado del propio damage_log.
+        # Esto NO es cifrado (es destrucción deliberada del cifrado AES-GCM):
+        # el XOR aquí rompe el tag, así que ni la clave correcta descifra ya.
         noise_seed = hashlib.sha3_256(b"".join(self.damage_log)).digest()
         noise = (noise_seed * (len(self.protected_payload) // len(noise_seed) + 1))[:len(self.protected_payload)]
         self.protected_payload = bytes(a ^ b for a, b in zip(self.protected_payload, noise))
@@ -188,8 +235,10 @@ def experiment():
 
     lock = BlindLock()
     secret_payload = b"PLANO_CAD_CONFIDENCIAL_v3.dwg::datos binarios simulados......."
-    lock.enroll(secret_payload)
-    true_dir = lock.true_direction  # solo para la demo, simula al dueño legítimo
+    # El dueño guarda su dirección FUERA del token: enroll() ya no la conserva
+    # (Q3 estructural), así que se genera aquí y se pasa explícitamente.
+    true_dir = random_direction()
+    lock.enroll(secret_payload, direction=true_dir)
 
     # atacante tantea 4 veces sin acertar
     for i in range(4):
@@ -225,8 +274,8 @@ def experiment():
     print("=" * 70)
 
     lock2 = BlindLock()
-    lock2.enroll(b"otro secreto")
-    true_dir2 = lock2.true_direction
+    true_dir2 = random_direction()
+    lock2.enroll(b"otro secreto", direction=true_dir2)
 
     # "el archivo" = todo lo que un atacante vería con el token en la mano
     token_file_contents = {
@@ -261,11 +310,14 @@ def experiment():
         "interpretation": (
             "El token en disco solo contiene: (a) un hash SHA3 de la dirección "
             "cuantizada+salt [avalancha total, sin gradiente de cercanía], "
-            "(b) el payload cifrado con una key derivada vía PBKDF2 de esa misma "
-            "dirección, (c) un salt aleatorio. Analizar el archivo offline no "
-            "revela NINGUNA pista de proximidad -- la correlación medida es "
-            "estadísticamente nula (~0), confirmando que no existe superficie de "
-            "ataque por análisis estático ni por fuerza bruta guiada por gradiente."
+            "(b) el payload cifrado con AES-256-GCM con una key derivada vía "
+            "PBKDF2 de esa misma dirección, (c) un salt aleatorio. Analizar "
+            "el archivo offline no revela NINGUNA pista de proximidad -- la "
+            "correlación medida es estadísticamente nula (~0, n=2000). Esto "
+            "es una medida de correlación lineal del byte 0, no una prueba "
+            "de fuerza bruta: la fuerza bruta con presupuesto se mide aparte "
+            "(tests/test_bruteforce_budget.py: 1 millón de direcciones "
+            "aleatorias, 0 aciertos)."
         ),
     }
 
@@ -277,7 +329,16 @@ def experiment():
 
     lock3 = BlindLock()
     secret3 = b"documento sensible"
-    lock3.enroll(secret3)
+    true_dir3 = random_direction()
+    lock3.enroll(secret3, direction=true_dir3)
+
+    # Prueba REAL (antes solo una lista de campos): serializar el objeto
+    # entero con pickle y comprobar que la dirección no aparece en ningún
+    # sitio. Antes del arreglo esto FALLABA: pickle.dumps(lock) recuperaba
+    # true_direction (medido 927 B recién enrolado, 1 687 B tras 5 fallos).
+    blob = pickle.dumps(lock3)
+    pickle_leaks = true_dir3.tobytes() in blob
+    recovered = pickle.loads(blob)
 
     # inspeccionamos el estado persistible del objeto (lo que iría a disco)
     persistable_fields = ["stored_commit", "protected_payload", "salt",
@@ -289,21 +350,26 @@ def experiment():
 
     print(f"  campos persistidos a disco: {persistable_fields}")
     print(f"  'true_direction' (la clave en claro) excluida de persistencia: {non_persisted}")
-    print(f"  la clave real solo existe en memoria durante enroll() y durante")
-    print(f"  la comparación hmac de UN intento -> nunca se escribe a disco")
+    print(f"  pickle.dumps(lock) = {len(blob)} B; direccion en el blob: {pickle_leaks}")
+    print(f"  direccion tras pickle.loads: {recovered.true_direction}")
+    print(f"  la clave real solo existe fuera del token (la guarda el dueño) y")
+    print(f"  en la variable local de enroll() durante la llamada -> nunca se")
+    print(f"  escribe a disco ni se serializa")
 
     results["Q3"] = {
         "claim": "sí, literal: la dirección real nunca se serializa",
         "field_excluded_from_persistence": non_persisted,
+        "pickle_size_bytes": len(blob),
+        "pickle_leaks_direction": pickle_leaks,
+        "direction_after_unpickle": recovered.true_direction,
         "interpretation": (
             "'Sin ver' no es solo metáfora de diseño: es una restricción de "
-            "implementación. true_direction vive únicamente en la pila de "
-            "llamada de enroll() y en el argumento local de attempt_access() "
-            "durante la verificación HMAC de un intento -- nunca se asigna a "
-            "un atributo persistente ni se loguea. El propio 'ver' (loguear, "
-            "guardar, comparar por proximidad) es lo que el diseño prohíbe "
-            "estructuralmente, no por política sino porque la función commit() "
-            "es de un solo sentido."
+            "implementación. enroll() borra true_direction del objeto tras "
+            "generar commit+payload, y __getstate__ la excluye del pickle "
+            "aunque llegara a estar asignada. La dirección vive únicamente "
+            "en la variable local de enroll() y en el argumento local de "
+            "attempt_access() durante la verificación HMAC de un intento -- "
+            "nunca se asigna a un atributo persistente ni se loguea."
         ),
     }
 
