@@ -1,0 +1,21 @@
+[package]
+name = "csg-sidecar"
+version = "0.1.0"
+edition = "2021"
+description = "Sidecar HTTP fino sobre el crate sello_integridad (NotarioProtegido + Ed25519 + SHA3-256) para TDCP"
+license = "LicenseRef-Elastic-2.0"
+
+[[bin]]
+name = "csg-sidecar"
+path = "src/main.rs"
+
+[dependencies]
+sello_integridad = { path = "../sello-integridad-rust" }
+serde_json = "1.0"
+
+[dev-dependencies]
+sello_integridad = { path = "../sello-integridad-rust" }
+serde_json = "1.0"
+
+[profile.release]
+opt-level = 3
