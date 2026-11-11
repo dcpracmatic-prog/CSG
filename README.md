@@ -31,14 +31,19 @@ feedback de cercanía); conatus ×1.6 por fallo; ruptura a los 5 fallos.
   el salt aleatorio; el número al decimal no es reproducible por diseño).
   Q3: `pickle.dumps(lock)` **no** recupera la dirección (ver abajo).
 - Tests: `python3 -m unittest discover -s tests -v` — **11 tests, 0 fallos**
-  (~19 s). Incluyen: pickle sin fuga (antes y después de 5 fallos),
+  (~51 s). Incluyen: pickle sin fuga (antes y después de 5 fallos),
   AES-GCM (roundtrip, sin repetición de flujo, alteración de 1 bit
   detectada por el tag), conatus como retardo real medido, y ruptura
   (5 fallos → rota, dueño fuera).
 - Fuerza bruta con presupuesto: `tests/test_bruteforce_budget.py` —
-  **1 000 000 de direcciones aleatorias en R⁶⁴, 0 aciertos**, en ~13 s
-  (~78 000 intentos/s, verificación offline contra el commit). Es una
-  medida con presupuesto, no una prueba de imposibilidad.
+  **1 000 000 de direcciones aleatorias en R⁶⁴, 0 aciertos**, en 23–42 s
+  por 1M en corrida sostenida (media 33,2 s; ~31 500 intentos/s;
+  verificación offline contra el commit). La tasa de ~78 000 intentos/s
+  solo sale en ráfaga corta (medido 76 936/s, 13,0 µs/intento). Medido
+  2026-11-11 con un entrenamiento de química al ~90 % CPU en paralelo,
+  que frena las corridas largas: en una máquina libre 1M intentos
+  debería tardar ~13 s. Es una medida con presupuesto, no una prueba de
+  imposibilidad.
 
 ### Arreglos 2026-11-11 (defectos medidos, hoy corregidos)
 
@@ -48,7 +53,7 @@ feedback de cercanía); conatus ×1.6 por fallo; ruptura a los 5 fallos.
    tras generar commit+payload, y `__getstate__` la excluye del pickle
    aunque llegara a estar asignada. El dueño guarda su dirección fuera
    del token y la pasa a `enroll(payload, direction=...)`. Medido:
-   `pickle.dumps(lock)` = 344 B, dirección ausente, `None` tras
+   `pickle.dumps(lock)` = 346 B, dirección ausente, `None` tras
    `pickle.loads`; el token recuperado sigue verificando al dueño.
 2. **Cifrado XOR repetitivo.** Antes: `xor_encrypt` repetía la clave cada
    32 B, sin autenticación. Ahora: **AES-256-GCM** (`cryptography`,
